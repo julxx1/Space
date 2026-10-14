@@ -1,0 +1,69 @@
+﻿MI CUARTO  -  version 9.1 (GitHub)
+=======================
+
+NOVEDADES VERSION 9.1
+- Precio de Amazon: ahora solo lee el precio principal de la pagina (no el de listas, variantes o carruseles). Si el precio de tu link se leyo automaticamente, la web te pide confirmarlo y recalcula con el que escribas; ese precio ya no se sobrescribe.
+
+NOVEDADES VERSION 9
+- El 'tu' del inicio ahora es cromado.
+- Se quito la seccion de paletas en Inspiracion.
+- Comparador de precios mas preciso: lee el precio de tu link (incluido Amazon), exige coincidencia alta con el producto, marca como 'atipico' los precios muy distintos (otras versiones o accesorios) y tu link compite con las demas tiendas. Si no se puede leer el precio, lo escribes en el detalle y recalcula.
+- Mejor opcion: solo cuenta tiendas con coincidencia alta; el precio de tu link ya no se ignora.
+
+NOVEDADES VERSION 8
+- Encabezado Liquid Glass: al hacer scroll, lo que queda detras se ve borroso a traves del cristal.
+- Mini animaciones al cambiar de seccion, al filtrar, al abrir una idea, al marcar favorito y en botones, tarjetas y menus.
+- Si tu computador tiene activada la opcion de 'reducir movimiento', las animaciones se desactivan solas.
+
+
+CÓMO ABRIRLO
+1. Descomprime esta carpeta donde quieras (por ejemplo en Documentos).
+2. Haz doble clic en  iniciar.bat
+   - La primera vez instala unos componentes (unos minutos) y después descarga
+     un modelo de IA de ~180 MB (una sola vez, necesita internet).
+   - Se abre solo la página en http://localhost:8765
+3. Para cerrar Mi Cuarto, cierra la ventana negra.
+
+CÓMO SE USA
+- Pega un link (Pinterest, Amazon o cualquier tienda) arriba y pulsa "Guardar idea".
+- Se guardan el nombre, las fotos y el link. Si el producto trae precio, también.
+- En segundo plano, la página:
+    1) deja SOLO el producto en la foto (quita fondo y objetos de alrededor);
+    2) busca el mismo producto en internet y te dice dónde comprarlo mejor.
+  Mientras trabaja, la tarjeta dice "Aislando producto..." o "Buscando precios...".
+- Toca una idea para ver su detalle: fotos, "Ir al producto", categoría,
+  moodboards/colecciones, lista de compras y el panel "Dónde comprarlo mejor".
+
+SECCIONES (cada una se abre sola con su pestaña del menú de arriba)
+- Mis ideas:       todo lo que guardas. Filtra por favoritas, sitio, categoría o busca.
+- Moodboards:      tableros por ambiente (Cuarto principal, Escritorio, Closet...).
+- Colecciones:     listas de objetos sueltos (lo que quieres comprar, regalos...).
+- Inspiración:     paletas (toca un color para copiarlo) y estilos para buscar en Pinterest.
+- Lista de compras: lo que quieres comprar, mejor precio, totales y casilla "Comprado".
+
+CONFIGURACIÓN (botón del engranaje)
+- Aislar el producto en la foto: se puede apagar. Siempre se guarda también la foto
+  original y puedes alternar entre original y "solo producto" en cada foto.
+- Comparar precios: se puede apagar; elige tu país; clave opcional de serper.dev
+  (gratis) para una búsqueda mucho más completa en Google Shopping.
+- Botón para la barra de favoritos (arrástralo): útil cuando una tienda como
+  Amazon bloquea la lectura automática. Estando en el producto, púlsalo y se guarda
+  con su foto y precio.
+
+LO QUE DEBES SABER (sin letra chica)
+- Aislar el producto: si la foto es de un ambiente muy cargado, la IA conserva el
+  objeto principal; a veces deja otro objeto pegado a él. Puedes volver a la original.
+- Precios: la página busca en internet y lee el precio de cada tienda. Algunas tiendas
+  no dejan leer su precio o no aparecen en el buscador; en ese caso lo dice y te deja
+  botones de búsqueda rápida (Google Shopping, MercadoLibre, Amazon, Falabella, etc.).
+  Revisa siempre que sea el mismo producto antes de comprar.
+- Amazon suele bloquear programas: para eso está el botón de favoritos.
+- Tus datos y fotos se guardan solo en esta carpeta (data.json, imagenes/).
+  Para llevarte tus ideas a otro computador, copia toda la carpeta.
+
+ACTUALIZAR SIN DESCARGAR ZIPS (GitHub privado)
+- Una sola vez: instala Git (https://git-scm.com/download/win) y en una carpeta nueva abre CMD y escribe:
+    git clone https://github.com/julxx1/Space.git Mi_Cuarto
+  (te pedira iniciar sesion en GitHub con tu cuenta).
+- Si ya tenias ideas guardadas, copia a la carpeta nueva estos archivos/carpetas de la vieja: data.json, groups.json, settings.json y la carpeta imagenes.
+- Despues, cada vez que yo actualice la web: doble clic en actualizar.bat y luego iniciar.bat.

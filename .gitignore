@@ -1,0 +1,9 @@
+# Datos personales: nunca se suben
+data.json
+groups.json
+settings.json
+imagenes/
+modelo/
+*.onnx
+__pycache__/
+*.pyc

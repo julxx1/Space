@@ -1,0 +1,512 @@
+"""Comparador de precios: busca el producto en internet y dice dónde conviene comprarlo.
+
+Fuentes (en este orden de confianza):
+  1. Serper.dev / Google Shopping  (opcional, con una clave gratuita)
+  2. MercadoLibre (API pública, si responde)
+  3. Buscador web (DuckDuckGo) + lectura del precio de cada página de tienda
+     (datos estructurados JSON-LD / meta / microdata que publican las propias tiendas)
+
+Nunca inventa precios: si una tienda no publica un precio legible, no entra en la tabla.
+"""
+import html as htmlmod
+import json
+import os
+import re
+import unicodedata
+import urllib.parse as up
+import urllib.request as ur
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
+
+UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+      "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
+DDG_URL = os.environ.get("MICUARTO_DDG", "https://html.duckduckgo.com/html/")
+SERPER_URL = os.environ.get("MICUARTO_SERPER", "https://google.serper.dev/shopping")
+ML_URL = os.environ.get("MICUARTO_ML", "https://api.mercadolibre.com")
+
+COUNTRIES = {
+    "CO": {"name": "Colombia", "cur": "COP", "kl": "co-es", "gl": "co", "ml": "MCO", "mltld": "com.co"},
+    "MX": {"name": "México", "cur": "MXN", "kl": "mx-es", "gl": "mx", "ml": "MLM", "mltld": "com.mx"},
+    "AR": {"name": "Argentina", "cur": "ARS", "kl": "ar-es", "gl": "ar", "ml": "MLA", "mltld": "com.ar"},
+    "CL": {"name": "Chile", "cur": "CLP", "kl": "cl-es", "gl": "cl", "ml": "MLC", "mltld": "cl"},
+    "PE": {"name": "Perú", "cur": "PEN", "kl": "pe-es", "gl": "pe", "ml": "MPE", "mltld": "com.pe"},
+    "ES": {"name": "España", "cur": "EUR", "kl": "es-es", "gl": "es", "ml": None, "mltld": None},
+    "US": {"name": "Estados Unidos", "cur": "USD", "kl": "us-en", "gl": "us", "ml": None, "mltld": None},
+}
+TLD_CUR = {"co": "COP", "mx": "MXN", "ar": "ARS", "cl": "CLP", "pe": "PEN", "es": "EUR", "br": "BRL"}
+SKIP_DOMAINS = ("pinterest.", "youtube.", "facebook.", "instagram.", "reddit.", "wikipedia.", "tiktok.",
+                "twitter.", "x.com", "linkedin.", "quora.", "duckduckgo.", "google.", "bing.")
+STORE_NAMES = {
+    "mercadolibre": "MercadoLibre", "amazon": "Amazon", "falabella": "Falabella", "exito": "Éxito",
+    "homecenter": "Homecenter", "alkosto": "Alkosto", "ktronix": "Ktronix", "panamericana": "Panamericana",
+    "easy": "Easy", "ikea": "IKEA", "aliexpress": "AliExpress", "temu": "Temu", "shein": "Shein",
+    "walmart": "Walmart", "ebay": "eBay", "linio": "Linio", "jumbo": "Jumbo", "olimpica": "Olímpica",
+    "pepeganga": "Pepe Ganga", "tennis": "Tennis", "arturocalle": "Arturo Calle", "sodimac": "Sodimac",
+    "cencosud": "Cencosud", "paris": "Paris", "ripley": "Ripley", "liverpool": "Liverpool", "etsy": "Etsy",
+    "wayfair": "Wayfair", "target": "Target", "homedepot": "Home Depot", "bestbuy": "Best Buy",
+}
+STOP = set("de la el los las para con por una uno unos unas del al y o en the for and with a of to in on by "
+           "un se su sus que es como mas más muy sin".split())
+
+
+# ------------------------------------------------------------------ utilidades
+def strip_accents(s):
+    return "".join(c for c in unicodedata.normalize("NFD", s or "") if unicodedata.category(c) != "Mn")
+
+
+def tokens(s):
+    t = re.findall(r"[a-z0-9]+", strip_accents(s).lower())
+    return [x for x in t if x not in STOP and (len(x) >= 3 or x.isdigit())]
+
+
+def match_score(query, text):
+    """Qué tanto del producto buscado aparece en el texto. Cifras (medidas, modelos) y siglas pesan el doble."""
+    q, t = tokens(query), set(tokens(text))
+    if not q:
+        return 0.0
+    got = tot = 0.0
+    for w in q:
+        wt = 2.0 if any(ch.isdigit() for ch in w) else 1.0
+        tot += wt
+        if w in t or any((len(w) >= 4 and (x.startswith(w[:5]) or w.startswith(x[:5])) and len(x) >= 4) for x in t):
+            got += wt
+    return round(got / tot, 2)
+
+
+def clean_query(name):
+    s = htmlmod.unescape(name or "")
+    s = re.sub(r"\[[^\]]*\]|\([^)]*\)", " ", s)
+    s = re.sub(r"(?i)^amazon\.[\w.]+\s*:\s*", "", s)
+    parts = re.split(r"\s[|–—]\s|\s-\s|:\s", s)
+    s = max(parts[:2], key=len) if len(parts) > 1 and len(parts[0]) < 12 else parts[0]
+    s = re.sub(r"(?i)envío gratis|free shipping|oferta|official store|tienda oficial", " ", s)
+    words = re.findall(r"[^\s,;]+", s)
+    return " ".join(words[:10]).strip()
+
+
+def parse_price(v):
+    """'1.299.900' -> 1299900.0 ; '1,299.90' -> 1299.9 ; 129900 -> 129900.0 ; None si no es precio"""
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return float(v) if v > 0 else None
+    s = re.sub(r"[^\d.,]", "", str(v))
+    if not s or not re.search(r"\d", s):
+        return None
+    if "," in s and "." in s:
+        dec = "," if s.rfind(",") > s.rfind(".") else "."
+        thou = "." if dec == "," else ","
+        s = s.replace(thou, "").replace(dec, ".")
+    elif "," in s or "." in s:
+        sep = "," if "," in s else "."
+        parts = s.split(sep)
+        if len(parts) > 2 or (len(parts) == 2 and len(parts[1]) == 3 and len(parts[0]) <= 3 and parts[0] != "0"):
+            s = "".join(parts)           # separador de miles
+        else:
+            s = ".".join(parts)          # decimales
+    try:
+        n = float(s)
+    except ValueError:
+        return None
+    return n if n > 0 else None
+
+
+def currency_of(text, default):
+    t = (text or "").upper()
+    if "US$" in t or "USD" in t:
+        return "USD"
+    if "€" in t or "EUR" in t:
+        return "EUR"
+    for c in ("COP", "MXN", "ARS", "CLP", "PEN", "BRL"):
+        if c in t:
+            return c
+    return default
+
+
+def domain_of(url):
+    d = (up.urlparse(url).hostname or "").lower()
+    return d[4:] if d.startswith("www.") else d
+
+
+def store_of(url):
+    d = domain_of(url)
+    if re.fullmatch(r"[\d.]+", d):
+        return d
+    labels = d.split(".")
+    core = labels[-2] if len(labels) >= 2 else d
+    if len(labels) >= 3 and labels[-2] in ("com", "co", "net", "org"):
+        core = labels[-3]
+    return STORE_NAMES.get(core, core.capitalize())
+
+
+def guess_currency(url, default):
+    last = domain_of(url).split(".")[-1]
+    return TLD_CUR.get(last, default)
+
+
+def http_get(url, timeout=10, limit=2_500_000, headers=None, data=None, method=None):
+    h = {"User-Agent": UA, "Accept": "text/html,application/json;q=0.9,*/*;q=0.8",
+         "Accept-Language": "es-CO,es;q=0.9,en;q=0.8", "Accept-Encoding": "identity"}
+    h.update(headers or {})
+    req = ur.Request(url, headers=h, data=data, method=method)
+    with ur.urlopen(req, timeout=timeout) as r:
+        raw = r.read(limit)
+        ct = r.headers.get("Content-Type", "")
+        m = re.search(r"charset=([\w-]+)", ct, re.I) or re.search(rb"<meta[^>]+charset=[\"']?([\w-]+)", raw[:4000], re.I)
+        enc = "utf-8"
+        if m:
+            g = m.group(1)
+            enc = g.decode() if isinstance(g, bytes) else g
+        try:
+            return raw.decode(enc, errors="replace"), r.geturl()
+        except LookupError:
+            return raw.decode("utf-8", errors="replace"), r.geturl()
+
+
+# ------------------------------------------------------------------ extracción
+def _availability(v):
+    s = str(v or "").lower()
+    if any(k in s for k in ("outofstock", "soldout", "discontinued", "out_of_stock")):
+        return "out"
+    if any(k in s for k in ("instock", "onlineonly", "limitedavailability", "instoreonly", "in_stock")):
+        return "in"
+    return "unknown"
+
+
+def _walk_products(node, out):
+    if isinstance(node, list):
+        for x in node:
+            _walk_products(x, out)
+    elif isinstance(node, dict):
+        t = node.get("@type")
+        types = t if isinstance(t, list) else [t]
+        if any(isinstance(x, str) and x.lower() in ("product", "productgroup", "individualproduct") for x in types):
+            out.append(node)
+        for v in node.values():
+            if isinstance(v, (dict, list)):
+                _walk_products(v, out)
+
+
+def _offers_of(product):
+    offers = product.get("offers")
+    if offers is None and product.get("hasVariant"):
+        offers = [v.get("offers") for v in product["hasVariant"] if isinstance(v, dict) and v.get("offers")]
+    flat = []
+
+    def add(o):
+        if isinstance(o, list):
+            for x in o:
+                add(x)
+        elif isinstance(o, dict):
+            if o.get("offers"):
+                add(o["offers"])
+            flat.append(o)
+
+    add(offers)
+    res = []
+    for o in flat:
+        spec = o.get("priceSpecification") if isinstance(o.get("priceSpecification"), dict) else {}
+        raw = next((v for v in (o.get("price"), o.get("lowPrice"), spec.get("price")) if v not in (None, "")), None)
+        price = parse_price(raw)
+        if price:
+            seller = o.get("seller")
+            res.append({"price": price,
+                        "currency": o.get("priceCurrency") or spec.get("priceCurrency"),
+                        "availability": _availability(o.get("availability")),
+                        "seller": seller.get("name") if isinstance(seller, dict) else (seller if isinstance(seller, str) else "")})
+    return res
+
+
+def extract_offers(html_text, url=""):
+    """Precios que la página publica en datos estructurados. -> lista de ofertas (sin repetir)."""
+    found, title = [], ""
+    m = re.search(r"<title[^>]*>(.*?)</title>", html_text, re.I | re.S)
+    if m:
+        title = re.sub(r"\s+", " ", htmlmod.unescape(m.group(1))).strip()
+    og = re.search(r"<meta[^>]+(?:property|name)=[\"']og:title[\"'][^>]*content=[\"']([^\"']+)", html_text, re.I)
+    if og:
+        title = htmlmod.unescape(og.group(1)).strip()
+    # 1) JSON-LD
+    for block in re.findall(r"<script[^>]+type=[\"']application/ld\+json[\"'][^>]*>(.*?)</script>", html_text, re.I | re.S):
+        try:
+            data = json.loads(block.strip(), strict=False)
+        except Exception:
+            continue
+        prods = []
+        _walk_products(data, prods)
+        for p in prods:
+            for o in _offers_of(p):
+                o["title"] = htmlmod.unescape(str(p.get("name") or title))[:200]
+                found.append(o)
+    # 2) meta de producto
+    if not found:
+        def meta(*keys):
+            for k in keys:
+                mm = re.search(r"<meta[^>]+(?:property|name|itemprop)=[\"']%s[\"'][^>]*content=[\"']([^\"']+)" % re.escape(k), html_text, re.I)
+                if not mm:
+                    mm = re.search(r"<meta[^>]+content=[\"']([^\"']+)[\"'][^>]*(?:property|name|itemprop)=[\"']%s[\"']" % re.escape(k), html_text, re.I)
+                if mm:
+                    return htmlmod.unescape(mm.group(1))
+            return None
+        price = parse_price(meta("product:price:amount", "og:price:amount", "twitter:data1", "price"))
+        if price:
+            found.append({"price": price, "currency": meta("product:price:currency", "og:price:currency", "priceCurrency"),
+                          "availability": _availability(meta("product:availability", "og:availability")),
+                          "seller": "", "title": title[:200]})
+    # 3) microdata
+    if not found:
+        mm = re.search(r"itemprop=[\"']price[\"'][^>]*content=[\"']([^\"']+)", html_text, re.I)
+        if mm and parse_price(mm.group(1)):
+            cur = re.search(r"itemprop=[\"']priceCurrency[\"'][^>]*content=[\"']([^\"']+)", html_text, re.I)
+            found.append({"price": parse_price(mm.group(1)), "currency": cur.group(1) if cur else None,
+                          "availability": "unknown", "seller": "", "title": title[:200]})
+    # 4) Amazon y tiendas que pintan el precio en el HTML. Solo bloques del precio principal
+    #    (nunca el primer precio de la página: puede ser de un carrusel, un precio de lista o una variante).
+    if not found and "a-offscreen" in html_text:
+        raw = None
+        for pat in (r"class=[\"'][^\"']*(?:priceToPay|apexPriceToPay)[^\"']*[\"'][^>]*>.{0,300}?class=[\"'][^\"']*a-offscreen[^\"']*[\"'][^>]*>([^<]{2,40})<",
+                    r"id=[\"']priceblock_(?:ourprice|dealprice|saleprice)[\"'][^>]*>([^<]{2,40})<",
+                    r"id=[\"']corePrice(?:Display)?_(?:desktop_)?feature_div[\"'].{0,1500}?class=[\"']a-price(?: aok-align-center)?[^\"']*[\"'][^>]*>.{0,300}?class=[\"']a-offscreen[\"'][^>]*>([^<]{2,40})<"):
+            mm = re.search(pat, html_text, re.I | re.S)
+            if mm:
+                raw = htmlmod.unescape(mm.group(1)).replace("\xa0", " ")
+                if parse_price(raw):
+                    break
+                raw = None
+        pr = parse_price(raw) if raw else None
+        if pr:
+            found.append({"price": pr, "currency": currency_of(raw, None), "availability": "unknown",
+                          "seller": "", "title": title[:200], "approx": True})
+    seen, out = set(), []
+    for o in found:
+        k = (o["price"], o.get("currency"))
+        if k not in seen:
+            seen.add(k)
+            out.append(o)
+    return out
+
+
+def parse_ddg(html_text):
+    out = []
+    for m in re.finditer(r"<a\b([^>]*)>(.*?)</a>", html_text, re.I | re.S):
+        attrs = m.group(1)
+        if "result__a" not in attrs:
+            continue
+        h = re.search(r"href=[\"']([^\"']+)", attrs)
+        if not h:
+            continue
+        href = htmlmod.unescape(h.group(1))
+        if href.startswith("//"):
+            href = "https:" + href
+        q = up.urlparse(href)
+        if "duckduckgo.com" in q.netloc and q.path.startswith("/l/"):
+            href = up.parse_qs(q.query).get("uddg", [""])[0]
+        if href.startswith("http"):
+            out.append((href, re.sub(r"\s+", " ", htmlmod.unescape(re.sub(r"<[^>]+>", "", m.group(2)))).strip()))
+    return out
+
+
+# ------------------------------------------------------------------ fuentes
+def from_serper(query, country, key):
+    c = COUNTRIES[country]
+    body = json.dumps({"q": query, "gl": c["gl"], "hl": "es", "num": 20}).encode()
+    txt, _ = http_get(SERPER_URL, timeout=15, data=body, method="POST",
+                      headers={"X-API-KEY": key, "Content-Type": "application/json"})
+    out = []
+    for r in (json.loads(txt).get("shopping") or []):
+        price = parse_price(r.get("price"))
+        link = r.get("link") or ""
+        if price and link.startswith("http"):
+            out.append({"title": r.get("title") or "", "url": link, "store": r.get("source") or store_of(link),
+                        "price": price, "currency": currency_of(r.get("price"), c["cur"]),
+                        "availability": "unknown", "source": "Google Shopping"})
+    return out
+
+
+def from_mercadolibre(query, country):
+    c = COUNTRIES[country]
+    if not c["ml"]:
+        return []
+    txt, _ = http_get(f"{ML_URL}/sites/{c['ml']}/search?" + up.urlencode({"q": query, "limit": 12}), timeout=10,
+                      headers={"Accept": "application/json"})
+    out = []
+    for r in (json.loads(txt).get("results") or []):
+        price, link = parse_price(r.get("price")), r.get("permalink") or ""
+        if price and link.startswith("http"):
+            out.append({"title": r.get("title") or "", "url": link, "store": "MercadoLibre", "price": price,
+                        "currency": r.get("currency_id") or c["cur"],
+                        "availability": "out" if r.get("available_quantity") == 0 else "in",
+                        "source": "MercadoLibre"})
+    return out
+
+
+def from_web(query, country, own_url):
+    """Busca en la web y lee el precio publicado en cada página de tienda."""
+    c = COUNTRIES[country]
+    results = []
+    for q in (f"{query} comprar precio {c['name']}", f"{query} precio"):
+        txt, _ = http_get(DDG_URL + "?" + up.urlencode({"q": q, "kl": c["kl"]}), timeout=12)
+        if re.search(r"anomaly|unusual traffic|captcha", txt[:20000], re.I) and not parse_ddg(txt):
+            raise RuntimeError("El buscador limitó las consultas")
+        results += parse_ddg(txt)
+    seen, cands = set(), []
+    for url, title in results:
+        d = domain_of(url)
+        if not d or any(s in d for s in SKIP_DOMAINS) or d in seen:
+            continue
+        seen.add(d)
+        cands.append((url, title))
+        if len(cands) >= 10:
+            break
+
+    def read(item):
+        url, title = item
+        try:
+            page, final = http_get(url, timeout=9)
+        except Exception:
+            return []
+        res = []
+        for o in extract_offers(page, final)[:2]:
+            res.append({"title": o.get("title") or title, "url": final, "store": store_of(final),
+                        "price": o["price"], "currency": o.get("currency") or guess_currency(final, c["cur"]),
+                        "availability": o.get("availability", "unknown"), "source": "Página de la tienda"})
+        return res
+
+    with ThreadPoolExecutor(6) as ex:
+        pages = list(ex.map(read, cands))
+    return [o for lst in pages for o in lst], len(cands)
+
+
+# ------------------------------------------------------------------ comparación
+def quick_links(query, country):
+    q = up.quote_plus(query)
+    c = COUNTRIES[country]
+    links = [("Google Shopping", f"https://www.google.com/search?tbm=shop&q={q}")]
+    if c["mltld"]:
+        links.append(("MercadoLibre", f"https://listado.mercadolibre.{c['mltld']}/{up.quote(query.replace(' ', '-'))}"))
+    links.append(("Amazon", f"https://www.amazon.com/s?k={q}"))
+    if country == "CO":
+        links += [("Falabella", f"https://www.falabella.com.co/falabella-co/search?Ntt={q}"),
+                  ("Éxito", f"https://www.exito.com/s?q={q}"),
+                  ("Homecenter", f"https://www.homecenter.com.co/homecenter-co/search?Ntt={q}"),
+                  ("Alkosto", f"https://www.alkosto.com/search?text={q}"),
+                  ("IKEA", f"https://www.ikea.com/co/es/search/?q={q}")]
+    links.append(("AliExpress", f"https://www.aliexpress.com/wholesale?SearchText={q}"))
+    return [{"name": n, "url": u} for n, u in links]
+
+
+def money(v, cur):
+    n = f"{v:,.0f}".replace(",", ".") if v >= 1000 or float(v).is_integer() else f"{v:,.2f}"
+    return f"{n} {cur}"
+
+
+def compare(name, own_url="", own_price=None, settings=None, query=None):
+    """-> dict con ofertas ordenadas, la mejor opción, un resumen y avisos."""
+    settings = settings or {}
+    country = settings.get("country") if settings.get("country") in COUNTRIES else "CO"
+    c = COUNTRIES[country]
+    query_given = bool(query and query.strip())
+    query = (query or clean_query(name)).strip()
+    notes, raw = [], []
+    key = (settings.get("serper_key") or "").strip()
+
+    if key:
+        try:
+            raw += from_serper(query, country, key)
+        except Exception as e:
+            notes.append(f"Serper.dev no respondió ({e.__class__.__name__}). Revisa tu clave.")
+    try:
+        raw += from_mercadolibre(query, country)
+    except Exception:
+        pass  # la API pública de MercadoLibre puede pedir sesión: se ignora sin ruido
+    if len(raw) < 4:
+        try:
+            web, n = from_web(query, country, own_url)
+            raw += web
+            if n == 0:
+                notes.append("El buscador no devolvió tiendas para esta búsqueda.")
+        except Exception as e:
+            notes.append("No pude consultar el buscador web (" + (str(e) or e.__class__.__name__) +
+                         "). Para resultados más estables agrega una clave gratuita de Serper.dev en Configuración.")
+
+    if own_price:
+        raw.append({"title": name, "url": own_url, "store": store_of(own_url) if own_url else "Tu link",
+                    "price": own_price.get("amount"), "currency": own_price.get("currency") or guess_currency(own_url, c["cur"]),
+                    "availability": "unknown", "source": "Tu link guardado", "you": True,
+                    "approx": bool(own_price.get("approx"))})
+
+    MIN_SHOW, HIGH = 0.5, 0.75      # por debajo de MIN_SHOW no se muestra; "alta" = HIGH o más
+    offers, dropped, seen = [], 0, {}
+    own_key = re.sub(r"[?#].*$", "", own_url or "").rstrip("/").lower()
+    full = htmlmod.unescape(name or "")
+    score_q = clean_query(full) if not query_given else query
+    for o in raw:
+        if not o.get("price") or not o.get("url"):
+            continue
+        o["currency"] = (o.get("currency") or c["cur"]).upper()
+        if not o.get("you") and own_key and re.sub(r"[?#].*$", "", o["url"]).rstrip("/").lower() == own_key:
+            continue  # es el mismo listado de tu link
+        slug = " ".join(re.findall(r"[A-Za-z0-9]+", up.urlparse(o["url"]).path))
+        o["match"] = 1.0 if o.get("you") else match_score(score_q, (o.get("title") or "") + " " + slug)
+        if o["match"] < MIN_SHOW:
+            dropped += 1
+            continue
+        o["domain"] = domain_of(o["url"])
+        k = (o["domain"], o["currency"], bool(o.get("you")))
+        if k in seen:  # una tienda: se queda la oferta más barata
+            if o["price"] < seen[k]["price"]:
+                seen[k].update(o)
+            continue
+        seen[k] = o
+        offers.append(o)
+    if dropped:
+        notes.append(f"Descarté {dropped} resultado(s) que no parecían ser este mismo producto.")
+
+    # Precio de referencia: el de tu link; si no hay, la mediana de las coincidencias altas.
+    same = [o for o in offers if o["currency"] == c["cur"]]
+    mine = next((o for o in same if o.get("you")), None)
+    highs = sorted(o["price"] for o in same if o["match"] >= HIGH and not o.get("you"))
+    anchor = mine["price"] if mine else (highs[len(highs) // 2] if len(highs) >= 3 else None)
+    for o in offers:
+        o["odd"] = bool(anchor and not o.get("you") and o["currency"] == c["cur"]
+                        and (o["price"] < anchor * 0.45 or o["price"] > anchor * 2.2))
+
+    def rank(o):
+        return (0 if o["currency"] == c["cur"] else 1, 1 if o["availability"] == "out" else 0, o["price"])
+
+    offers.sort(key=rank)
+    pool = [o for o in offers if o["currency"] == c["cur"] and o["availability"] != "out"]
+    sure = [o for o in pool if (o.get("you") or o["match"] >= HIGH) and not o["odd"]]
+    maybe = [o for o in pool if not o["odd"]]
+    best = min(sure, key=lambda o: o["price"]) if sure else (min(maybe, key=lambda o: o["price"]) if maybe else None)
+    low_conf = bool(best and not best.get("you") and best["match"] < HIGH)
+    if any(o["odd"] for o in offers):
+        notes.append("Marqué como «atípico» un precio muy distinto al de referencia: suele ser otra versión, un accesorio o un paquete. No cuenta como mejor opción.")
+    if not mine:
+        notes.append("No pude leer el precio de tu link, así que no lo comparé. Escríbelo abajo (o pega el que ves en la tienda) y recalculo.")
+
+    summary = ""
+    if best:
+        summary = f"Mejor opción: {best['store']} a {money(best['price'], best['currency'])}"
+        if best.get("you"):
+            summary += ". Tu link ya tiene el mejor precio que encontré"
+        elif mine and mine["price"] > best["price"]:
+            diff = mine["price"] - best["price"]
+            summary += f". Ahorras {money(diff, best['currency'])} ({round(diff * 100 / mine['price'])}%) frente a tu link"
+        summary += "."
+        if mine and mine.get("approx") and not best.get("you"):
+            summary += f" Antes de decidir confirma el precio de tu link: leí {money(mine['price'], mine['currency'])} automáticamente y podría no ser el que ves."
+        if low_conf:
+            notes.append("La coincidencia con el producto no es alta: confirma que sea el mismo antes de comprar.")
+    elif offers:
+        summary = f"Encontré precios, pero ninguno en {c['cur']}. Revísalos abajo."
+    else:
+        summary = "No encontré precios verificables para este producto."
+    other = [o for o in offers if o["currency"] != c["cur"]]
+    if other and best:
+        notes.append(f"{len(other)} oferta(s) están en otra moneda y no se comparan con {c['cur']}.")
+
+    return {"query": query, "country": country, "currency": c["cur"],
+            "checked_at": datetime.now().isoformat(timespec="seconds"),
+            "offers": offers[:15], "best": best, "own_missing": not mine, "own_unverified": bool(mine and mine.get("approx")), "summary": summary, "notes": notes,
+            "links": quick_links(query, country)}
