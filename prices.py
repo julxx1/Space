@@ -67,6 +67,11 @@ def tokens(s):
     return [x for x in t if x not in STOP and (len(x) >= 3 or x.isdigit())]
 
 
+LOW = set("handmade hecho hecha mano artesanal custom personalizado personalizada decorativo decorativa decoracion "
+          "decor nuevo nueva new original premium luxury lujo set pack kit regalo gift envio gratis oferta mini "
+          "pequeno pequena grande vintage moderno moderna estilo style".split())
+
+
 def match_score(query, text):
     """Qué tanto del producto buscado aparece en el texto. Cifras (medidas, modelos) y siglas pesan el doble."""
     q, t = tokens(query), set(tokens(text))
@@ -74,7 +79,7 @@ def match_score(query, text):
         return 0.0
     got = tot = 0.0
     for w in q:
-        wt = 2.0 if any(ch.isdigit() for ch in w) else 1.0
+        wt = 2.0 if any(ch.isdigit() for ch in w) else 0.4 if w in LOW else 1.0
         tot += wt
         if w in t or any((len(w) >= 4 and (x.startswith(w[:5]) or w.startswith(x[:5])) and len(x) >= 4) for x in t):
             got += wt
@@ -83,6 +88,7 @@ def match_score(query, text):
 
 def clean_query(name):
     s = htmlmod.unescape(name or "")
+    s = re.sub(r"#\w+", " ", s)   # hashtags de Pinterest
     s = re.sub(r"\[[^\]]*\]|\([^)]*\)", " ", s)
     s = re.sub(r"(?i)^amazon\.[\w.]+\s*:\s*", "", s)
     parts = re.split(r"\s[|–—]\s|\s-\s|:\s", s)
@@ -564,7 +570,7 @@ def compare(name, own_url="", own_price=None, settings=None, query=None):
                     "availability": "unknown", "source": "Tu link guardado", "you": True,
                     "approx": bool(own_price.get("approx"))})
 
-    MIN_SHOW, HIGH = 0.5, 0.75      # por debajo de MIN_SHOW no se muestra; "alta" = HIGH o más
+    MIN_SHOW, HIGH = 0.6, 0.65      # por debajo de MIN_SHOW no se muestra; "alta" = HIGH o más
     offers, dropped, seen, converted = [], 0, {}, 0
     own_key = re.sub(r"[?#].*$", "", own_url or "").rstrip("/").lower()
     full = htmlmod.unescape(name or "")
@@ -615,7 +621,7 @@ def compare(name, own_url="", own_price=None, settings=None, query=None):
     pool = [o for o in offers if o["currency"] == tgt and o["availability"] != "out"]
     sure = [o for o in pool if (o.get("you") or o["match"] >= HIGH) and not o["odd"]]
     maybe = [o for o in pool if not o["odd"]]
-    best = min(sure, key=lambda o: o["price"]) if sure else (min(maybe, key=lambda o: o["price"]) if maybe else None)
+    best = min(sure, key=lambda o: o["price"]) if sure else None   # sin coincidencia clara no recomiendo nada
     low_conf = bool(best and not best.get("you") and best["match"] < HIGH)
     if any(o["odd"] for o in offers):
         notes.append("Marqué como «atípico» un precio muy distinto al de referencia: suele ser otra versión, un accesorio o un paquete. No cuenta como mejor opción.")
@@ -636,6 +642,8 @@ def compare(name, own_url="", own_price=None, settings=None, query=None):
         summary += "."
         if low_conf:
             notes.append("La coincidencia con el producto no es alta: confirma que sea el mismo antes de comprar.")
+    elif maybe:
+        summary = "No encontré una tienda que coincida claramente con este producto. Abajo dejo las más parecidas por si alguna te sirve."
     elif offers:
         summary = f"Encontré precios, pero ninguno en {tgt}. Revísalos abajo."
     else:
