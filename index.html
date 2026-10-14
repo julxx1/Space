@@ -959,10 +959,6 @@ function comparePanel(it) {
   } else {
     if (c.error) h += `<div class="noteb">${esc(c.error)}</div>`;
     const b = c.best;
-    if (c.own_unverified && it.price) {
-      h += `<div class="noteb" style="margin:0 0 12px"><b>Confirma el precio de tu link.</b> Leí ${esc(money(it.price.amount, it.price.currency))} automáticamente, pero Amazon puede mostrar otro valor según el país. Escribe el que ves tú:
-        <div class="qrow" style="margin-top:8px"><input id="cprice" type="text" inputmode="decimal" value="${esc(String(it.price.amount).replace('.', ','))}" aria-label="Precio de tu link"><button class="chipb dk" data-do="setprice">Confirmar precio</button></div></div>`;
-    }
     if (b) {
       h += `<div class="bestc"><small>Mejor opción</small><div class="bp">${esc(money(b.price, b.currency))} · ${esc(b.store)}</div>
         <div class="bs">${esc(c.summary || '')}</div>
@@ -984,7 +980,7 @@ function comparePanel(it) {
     if (c.notes && c.notes.length) h += `<div class="nts">${c.notes.map(n => `<div>• ${esc(n)}</div>`).join('')}</div>`;
     if (c.checked_at) h += `<div class="nts"><div>Revisado: ${esc(new Date(c.checked_at).toLocaleString('es'))}${c.country ? ' · país: ' + esc(c.country) : ''}</div></div>`;
   }
-  if (c.checked_at && !busy && !(c.own_unverified && it.price)) {
+  if (c.checked_at && !busy && !(it.price && it.price.amount)) {
     const mine = it.price && it.price.amount;
     h += `<div class="qrow" style="margin-top:14px"><input id="cprice" type="text" inputmode="decimal" value="${mine ? esc(String(it.price.amount).replace('.', ',')) : ''}" aria-label="Precio de tu link" placeholder="${mine ? 'Precio de tu link' : 'Precio que ves en tu link (' + esc(c.currency || '') + ')'}"><button class="chipb" data-do="setprice">${mine ? 'Corregir precio de mi link' : 'Guardar precio de mi link'}</button></div>`;
   }

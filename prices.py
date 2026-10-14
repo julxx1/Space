@@ -561,8 +561,6 @@ def compare(name, own_url="", own_price=None, settings=None, query=None):
             diff = mine["price"] - best["price"]
             summary += f". Ahorras {money(diff, best['currency'])} ({round(diff * 100 / mine['price'])}%) frente a tu link"
         summary += "."
-        if mine and mine.get("approx") and not best.get("you"):
-            summary += f" Antes de decidir confirma el precio de tu link: leí {money(mine['price'], mine['currency'])} automáticamente y podría no ser el que ves."
         if low_conf:
             notes.append("La coincidencia con el producto no es alta: confirma que sea el mismo antes de comprar.")
     elif offers:
