@@ -66,4 +66,4 @@ ACTUALIZAR SIN DESCARGAR ZIPS (GitHub privado)
     git clone https://github.com/julxx1/Space.git Mi_Cuarto
   (te pedira iniciar sesion en GitHub con tu cuenta).
 - Si ya tenias ideas guardadas, copia a la carpeta nueva estos archivos/carpetas de la vieja: data.json, groups.json, settings.json y la carpeta imagenes.
-- Despues, cada vez que yo actualice la web: doble clic en actualizar.bat y luego iniciar.bat.
+- Despues solo abre iniciar.bat: se actualiza solo cada vez que lo abres (actualizar.bat queda como respaldo).

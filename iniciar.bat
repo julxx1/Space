@@ -1,6 +1,7 @@
 @echo off
 cd /d "%~dp0"
 title Mi Cuarto
+if exist ".git" where git >nul 2>nul && (echo Buscando actualizaciones... && git pull --ff-only -q)
 set PY=
 where py >nul 2>nul
 if %errorlevel%==0 set PY=py
