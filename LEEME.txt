@@ -61,9 +61,8 @@ LO QUE DEBES SABER (sin letra chica)
 - Tus datos y fotos se guardan solo en esta carpeta (data.json, imagenes/).
   Para llevarte tus ideas a otro computador, copia toda la carpeta.
 
-ACTUALIZAR SIN DESCARGAR ZIPS (GitHub privado)
-- Una sola vez: instala Git (https://git-scm.com/download/win) y en una carpeta nueva abre CMD y escribe:
-    git clone https://github.com/julxx1/Space.git Mi_Cuarto
-  (te pedira iniciar sesion en GitHub con tu cuenta).
-- Si ya tenias ideas guardadas, copia a la carpeta nueva estos archivos/carpetas de la vieja: data.json, groups.json, settings.json y la carpeta imagenes.
-- Despues solo abre iniciar.bat: se actualiza solo cada vez que lo abres (actualizar.bat queda como respaldo).
+ACTUALIZACIONES AUTOMATICAS
+- Cada vez que abres iniciar.bat, Mi Cuarto busca la ultima version en GitHub (github.com/julxx1/Space) y se actualiza solo. No necesitas Git ni descargar zips.
+- Tus ideas, fotos y ajustes nunca se tocan.
+- Sin internet, se abre la version que ya tienes.
+- Si quieres forzar la busqueda sin abrir la web: actualizar.bat
