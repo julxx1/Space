@@ -7,3 +7,4 @@ modelo/
 *.onnx
 __pycache__/
 *.pyc
+rates.json

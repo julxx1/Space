@@ -1,5 +1,9 @@
-﻿MI CUARTO  -  version 9.1 (GitHub)
+﻿MI CUARTO  -  version 9.2
 =======================
+
+NOVEDADES VERSION 9.2
+- Configuracion > Moneda: elige en que moneda ver y comparar los precios. Los precios en otras monedas se convierten con la tasa del dia (se ve con el simbolo ≈).
+- Amazon: se pide el precio en tu moneda, se lee solo el precio principal y, si Amazon lo bloquea, la web te avisa y te deja escribirlo. El boton 'Guardar en Mi Cuarto' lee el precio desde tu navegador.
 
 NOVEDADES VERSION 9.1
 - Precio de Amazon: ahora solo lee el precio principal de la pagina (no el de listas, variantes o carruseles). Si el precio de tu link se leyo automaticamente, la web te pide confirmarlo y recalcula con el que escribas; ese precio ya no se sobrescribe.

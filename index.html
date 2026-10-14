@@ -576,7 +576,14 @@ const tintOf = id => { let h = 0; for (const c of String(id)) h = (h * 31 + c.ch
 const imgUrl = fn => '/imagenes/' + encodeURIComponent(fn);
 const plural = (n, a, b) => n + ' ' + (n === 1 ? a : b);
 
-let items = [], groups = [], settings = null, engine = null, lastSnap = '';
+let items = [], groups = [], settings = null, engine = null, lastSnap = '', RATES = {};
+const DISP = () => (settings && settings.currency_eff) || '';
+function conv(a, cur) {   // -> {a, cur, approx}: pasa el monto a la moneda elegida si hay tasa
+  const d = DISP(), n = Number(a);
+  if (!d || !cur || cur === d || !RATES[cur] || !RATES[d]) return {a: n, cur, approx: false};
+  return {a: n / RATES[cur] * RATES[d], cur: d, approx: true};
+}
+async function loadRates() { try { RATES = (await api('GET', '/api/rates')).rates || {}; } catch { RATES = {}; } }
 let flt = {tab: 'all', q: '', cat: ''};
 let CATEGORIES = ['Iluminación','Muebles','Decoración','Textiles','Organización','Arte y posters','Plantas','Espejos','Otros'];
 
@@ -587,10 +594,11 @@ async function api(method, path, body) {
   return d;
 }
 
+function fmt(n, cur) { return new Intl.NumberFormat('es-CO', {maximumFractionDigits: n >= 1000 || !(n % 1) ? 0 : 2}).format(n) + (cur ? ' ' + cur : ''); }
 function money(a, cur) {
   if (a == null || a === '') return '';
-  const n = Number(a);
-  return new Intl.NumberFormat('es-CO', {maximumFractionDigits: n >= 1000 || !(n % 1) ? 0 : 2}).format(n) + (cur ? ' ' + cur : '');
+  const c = conv(a, cur);
+  return (c.approx ? '≈ ' : '') + fmt(c.a, c.cur);
 }
 function itemPrice(it) {
   if (it.price && it.price.amount) return {amount: it.price.amount, currency: it.price.currency, src: 'guardado'};
@@ -876,8 +884,9 @@ function renderShop() {
   const list = items.filter(i => i.shop);
   $('#bShop').textContent = plural(list.length, 'producto', 'productos');
   const pend = {}, done = {};
-  list.forEach(i => { const s = shopInfo(i); if (s.amount) { const t = i.bought ? done : pend; t[s.currency] = (t[s.currency] || 0) + s.amount; } });
-  const tots = (o, cls, lab) => Object.keys(o).length ? Object.entries(o).map(([c, v]) => `<div class="tot ${cls}"><small>${lab}</small><b>${esc(money(v, c))}</b></div>`).join('') : '';
+  let approxTot = false;
+  list.forEach(i => { const s = shopInfo(i); if (s.amount) { const t = i.bought ? done : pend, c = conv(s.amount, s.currency); if (c.approx) approxTot = true; t[c.cur] = (t[c.cur] || 0) + c.a; } });
+  const tots = (o, cls, lab) => Object.keys(o).length ? Object.entries(o).map(([c, v]) => `<div class="tot ${cls}"><small>${lab}</small><b>${esc((approxTot ? '≈ ' : '') + fmt(v, c))}</b></div>`).join('') : '';
   $('#totals').innerHTML = tots(pend, '', 'Por comprar') + tots(done, 'alt', 'Ya comprado');
   $('#shoplist').innerHTML = list.length ? list.map(i => {
     const s = shopInfo(i), b = i.busy || {}, fn = i.images[0];
@@ -968,7 +977,7 @@ function comparePanel(it) {
           const stock = o.availability === 'in' ? 'Disponible' : o.availability === 'out' ? 'Agotado' : '—';
           return `<tr class="${isBest ? 'best' : ''}${o.currency !== c.currency || o.odd ? ' dim' : ''}" title="${esc(o.title || '')}">
             <td><b>${esc(o.store)}</b>${o.you ? '<span class="mini">tu link</span>' : ''}${o.odd ? '<span class="mini">atípico</span>' : ''}</td>
-            <td>${esc(money(o.price, o.currency))}</td><td class="hide-s">${o.match != null ? Math.round(o.match * 100) + '%' : '—'}</td>
+            <td>${esc(money(o.price, o.currency))}${o.orig ? `<small style="display:block;color:var(--mute)">de ${esc(fmt(o.orig.price, o.orig.currency))}</small>` : ''}</td><td class="hide-s">${o.match != null ? Math.round(o.match * 100) + '%' : '—'}</td>
             <td>${stock}</td><td><a target="_blank" rel="noopener" href="${esc(o.url)}">Ver ↗</a></td></tr>`;
         }).join('') + '</tbody></table></div>';
     }
@@ -1265,6 +1274,8 @@ function renderSettings() {
     <p>Busco el mismo producto en otras tiendas de internet y te digo cuál conviene más.</p>
     <label class="tg"><span>Buscar el mejor precio al guardar una idea</span><span class="sw2"><input type="checkbox" id="sAuto" ${s.auto_compare ? 'checked' : ''}><i></i></span></label>
     <div class="field"><label for="sCountry">País donde compras</label><select id="sCountry">${Object.entries(s.countries || {}).map(([k, v]) => `<option value="${k}"${k === s.country ? ' selected' : ''}>${esc(v)}</option>`).join('')}</select></div>
+    <div class="field"><label for="sCur">Moneda para mostrar y comparar</label><select id="sCur"><option value=""${!s.currency ? ' selected' : ''}>Automática (según el país)</option>${Object.entries(s.currencies || {}).map(([k, v]) => `<option value="${k}"${k === s.currency ? ' selected' : ''}>${esc(v)}</option>`).join('')}</select>
+      <small>Los precios en otras monedas se convierten con la tasa de cambio del día (aproximado). Se ve con «≈».</small></div>
     <div class="field"><label for="sKey">Clave de Serper.dev (opcional)</label><input id="sKey" type="password" autocomplete="off" value="${esc(s.has_key ? s.key_hint : '')}" placeholder="Pega aquí tu clave gratuita de serper.dev">
       <small>Con la clave, la búsqueda en Google Shopping es mucho más completa. Sin ella igual busco con otras fuentes.</small></div>
     <div class="row" style="margin-top:8px"><button class="chipb dk" data-s="key">Guardar clave</button></div>
@@ -1291,7 +1302,8 @@ $('#btnSettings').onclick = openSettings;
 $('#settings').addEventListener('change', e => {
   if (e.target.id === 'sIso') putSettings({isolate: e.target.checked}, e.target.checked ? 'Aislar producto: activado' : 'Aislar producto: desactivado');
   if (e.target.id === 'sAuto') putSettings({auto_compare: e.target.checked}, e.target.checked ? 'Comparar precios: activado' : 'Comparar precios: desactivado');
-  if (e.target.id === 'sCountry') putSettings({country: e.target.value}, 'País guardado');
+  if (e.target.id === 'sCountry') putSettings({country: e.target.value}, 'País guardado').then(async () => { await loadRates(); renderAll(); renderSettings(); });
+  if (e.target.id === 'sCur') putSettings({currency: e.target.value}, 'Moneda guardada').then(async () => { await loadRates(); renderAll(); renderSettings(); if (det && det.id) renderDetail(true); });
 });
 $('#settings').addEventListener('click', async e => {
   const b = e.target.closest('[data-s]'); if (!b) return;
@@ -1330,7 +1342,7 @@ var li=d.getElementById('landingImage');add(li&&(li.getAttribute('data-old-hires
 add(m('og:image'));add(m('twitter:image'));
 [].filter.call(d.images,function(x){return x.naturalWidth>=250&&x.naturalHeight>=250&&x.src.indexOf('http')==0}).sort(function(x,y){return y.naturalWidth*y.naturalHeight-x.naturalWidth*x.naturalHeight}).slice(0,6).forEach(function(x){add(x.src)});
 o=o.slice(0,6);
-var pe=d.querySelector('.a-price .a-offscreen,#corePrice_feature_div .a-offscreen,[itemprop=price]'),pr=(pe&&(pe.content||pe.textContent))||m('product:price:amount')||m('og:price:amount')||'';
+var pe=d.querySelector('.priceToPay .a-offscreen')||d.querySelector('#corePrice_feature_div .a-price:not(.a-text-price) .a-offscreen,#corePriceDisplay_desktop_feature_div .a-price:not(.a-text-price) .a-offscreen')||d.querySelector('[itemprop=price]'),pr=(pe&&(pe.content||pe.textContent))||m('product:price:amount')||m('og:price:amount')||'';
 if(pr&&!/[A-Za-z$€£]/.test(pr)){var cu=m('product:price:currency')||m('og:price:currency');if(cu)pr+=' '+cu}
 if(!pr){[].forEach.call(d.querySelectorAll('script[type="application/ld+json"]'),function(s){try{(function w(x){if(!x||pr)return;if(Array.isArray(x))return x.forEach(w);if(typeof x=='object'){if(x.price||x.lowPrice){pr=String(x.price||x.lowPrice)+(x.priceCurrency?' '+x.priceCurrency:'')}else Object.keys(x).forEach(function(k){w(x[k])})}})(JSON.parse(s.textContent))}catch(e){}})}
 window.open('${location.origin}/?add=1&u='+encodeURIComponent(location.href)+'&t='+encodeURIComponent(t.trim().replace(/\\s+/g,' ').slice(0,200))+'&p='+encodeURIComponent(String(pr).trim().replace(/\\s+/g,' ').slice(0,40))+o.map(function(x){return '&i='+encodeURIComponent(x)}).join(''),'_blank')})();`;
@@ -1415,6 +1427,7 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && an
     const [st, se] = await Promise.all([api('GET', '/api/status'), api('GET', '/api/settings')]);
     if (st.categories) CATEGORIES = st.categories; engine = st.engine; settings = se;
   } catch {}
+  await loadRates(); renderAll();
   try { await reload(); }
   catch { helper('No pude conectar con Mi Cuarto. ¿Sigue abierta la ventana negra de iniciar.bat?', true); return; }
   saveFromBookmarklet();

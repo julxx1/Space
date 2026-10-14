@@ -23,6 +23,13 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
 DDG_URL = os.environ.get("MICUARTO_DDG", "https://html.duckduckgo.com/html/")
 SERPER_URL = os.environ.get("MICUARTO_SERPER", "https://google.serper.dev/shopping")
 ML_URL = os.environ.get("MICUARTO_ML", "https://api.mercadolibre.com")
+RATES_URL = os.environ.get("MICUARTO_RATES", "https://open.er-api.com/v6/latest/USD")
+RATES_FILE = None          # la define server.py (rates.json junto a los datos)
+RATES_TTL = 12 * 3600      # se actualizan cada 12 horas
+CURRENCIES = {"COP": "Peso colombiano (COP)", "USD": "Dólar estadounidense (USD)", "EUR": "Euro (EUR)",
+              "MXN": "Peso mexicano (MXN)", "ARS": "Peso argentino (ARS)", "CLP": "Peso chileno (CLP)",
+              "PEN": "Sol peruano (PEN)", "BRL": "Real brasileño (BRL)"}
+_rates = {"at": 0, "rates": {}}
 
 COUNTRIES = {
     "CO": {"name": "Colombia", "cur": "COP", "kl": "co-es", "gl": "co", "ml": "MCO", "mltld": "com.co"},
@@ -277,6 +284,16 @@ def extract_offers(html_text, url=""):
         if pr:
             found.append({"price": pr, "currency": currency_of(raw, None), "availability": "unknown",
                           "seller": "", "title": title[:200], "approx": True})
+    # 5) Último recurso en páginas tipo Amazon: el precio que la propia página repite en sus datos internos.
+    #    Solo si todas las apariciones coinciden (si hay varias versiones, no adivino).
+    if not found and "a-offscreen" in html_text:
+        vals = set(re.findall(r'"priceAmount"\s*:\s*"?([\d.]+)"?', html_text))
+        if len(vals) == 1:
+            pr = parse_price(next(iter(vals)))
+            dp = re.search(r'"displayPrice"\s*:\s*"([^"]{1,30})"', html_text)
+            if pr:
+                found.append({"price": pr, "currency": currency_of(dp.group(1) if dp else "", None),
+                              "availability": "unknown", "seller": "", "title": title[:200], "approx": True})
     seen, out = set(), []
     for o in found:
         k = (o["price"], o.get("currency"))
@@ -395,6 +412,44 @@ def quick_links(query, country):
     return [{"name": n, "url": u} for n, u in links]
 
 
+def get_rates(force=False):
+    """Tasas de cambio (base USD) desde internet, guardadas 12 h. {} si no hay forma de obtenerlas."""
+    import time
+    now = time.time()
+    if not _rates["rates"] and RATES_FILE and os.path.exists(RATES_FILE):
+        try:
+            d = json.load(open(RATES_FILE, encoding="utf-8"))
+            _rates.update(at=d.get("at", 0), rates=d.get("rates", {}))
+        except Exception:
+            pass
+    if force or not _rates["rates"] or now - _rates["at"] > RATES_TTL:
+        try:
+            txt, _ = http_get(RATES_URL, timeout=8, headers={"Accept": "application/json"})
+            r = json.loads(txt).get("rates") or {}
+            r = {k: float(v) for k, v in r.items() if k in CURRENCIES and isinstance(v, (int, float)) and v > 0}
+            if len(r) >= 3:
+                r["USD"] = 1.0
+                _rates.update(at=now, rates=r)
+                if RATES_FILE:
+                    try:
+                        json.dump({"at": now, "rates": r}, open(RATES_FILE, "w", encoding="utf-8"))
+                    except Exception:
+                        pass
+        except Exception:
+            pass  # sin internet: se usan las últimas tasas guardadas, si las hay
+    return dict(_rates["rates"]), _rates["at"]
+
+
+def convert(amount, frm, to):
+    """amount en 'frm' -> en 'to'. None si no hay tasa."""
+    if frm == to:
+        return amount
+    r, _ = get_rates()
+    if frm in r and to in r:
+        return amount / r[frm] * r[to]
+    return None
+
+
 def money(v, cur):
     n = f"{v:,.0f}".replace(",", ".") if v >= 1000 or float(v).is_integer() else f"{v:,.2f}"
     return f"{n} {cur}"
@@ -405,6 +460,7 @@ def compare(name, own_url="", own_price=None, settings=None, query=None):
     settings = settings or {}
     country = settings.get("country") if settings.get("country") in COUNTRIES else "CO"
     c = COUNTRIES[country]
+    tgt = settings.get("currency") if settings.get("currency") in CURRENCIES else c["cur"]  # moneda en la que se compara
     query_given = bool(query and query.strip())
     query = (query or clean_query(name)).strip()
     notes, raw = [], []
@@ -436,7 +492,7 @@ def compare(name, own_url="", own_price=None, settings=None, query=None):
                     "approx": bool(own_price.get("approx"))})
 
     MIN_SHOW, HIGH = 0.5, 0.75      # por debajo de MIN_SHOW no se muestra; "alta" = HIGH o más
-    offers, dropped, seen = [], 0, {}
+    offers, dropped, seen, converted = [], 0, {}, 0
     own_key = re.sub(r"[?#].*$", "", own_url or "").rstrip("/").lower()
     full = htmlmod.unescape(name or "")
     score_q = clean_query(full) if not query_given else query
@@ -444,6 +500,12 @@ def compare(name, own_url="", own_price=None, settings=None, query=None):
         if not o.get("price") or not o.get("url"):
             continue
         o["currency"] = (o.get("currency") or c["cur"]).upper()
+        if o["currency"] != tgt and o["currency"] in CURRENCIES:
+            cv = convert(o["price"], o["currency"], tgt)
+            if cv:
+                o["orig"] = {"price": o["price"], "currency": o["currency"]}
+                o["price"], o["currency"] = round(cv, 2), tgt
+                converted += 1
         if not o.get("you") and own_key and re.sub(r"[?#].*$", "", o["url"]).rstrip("/").lower() == own_key:
             continue  # es el mismo listado de tu link
         slug = " ".join(re.findall(r"[A-Za-z0-9]+", up.urlparse(o["url"]).path))
@@ -459,23 +521,25 @@ def compare(name, own_url="", own_price=None, settings=None, query=None):
             continue
         seen[k] = o
         offers.append(o)
+    if converted:
+        notes.append(f"{converted} precio(s) estaban en otra moneda y los convertí a {tgt} con la tasa de hoy (aproximado: no incluye envío ni impuestos).")
     if dropped:
         notes.append(f"Descarté {dropped} resultado(s) que no parecían ser este mismo producto.")
 
     # Precio de referencia: el de tu link; si no hay, la mediana de las coincidencias altas.
-    same = [o for o in offers if o["currency"] == c["cur"]]
+    same = [o for o in offers if o["currency"] == tgt]
     mine = next((o for o in same if o.get("you")), None)
     highs = sorted(o["price"] for o in same if o["match"] >= HIGH and not o.get("you"))
     anchor = mine["price"] if mine else (highs[len(highs) // 2] if len(highs) >= 3 else None)
     for o in offers:
-        o["odd"] = bool(anchor and not o.get("you") and o["currency"] == c["cur"]
+        o["odd"] = bool(anchor and not o.get("you") and o["currency"] == tgt
                         and (o["price"] < anchor * 0.45 or o["price"] > anchor * 2.2))
 
     def rank(o):
-        return (0 if o["currency"] == c["cur"] else 1, 1 if o["availability"] == "out" else 0, o["price"])
+        return (0 if o["currency"] == tgt else 1, 1 if o["availability"] == "out" else 0, o["price"])
 
     offers.sort(key=rank)
-    pool = [o for o in offers if o["currency"] == c["cur"] and o["availability"] != "out"]
+    pool = [o for o in offers if o["currency"] == tgt and o["availability"] != "out"]
     sure = [o for o in pool if (o.get("you") or o["match"] >= HIGH) and not o["odd"]]
     maybe = [o for o in pool if not o["odd"]]
     best = min(sure, key=lambda o: o["price"]) if sure else (min(maybe, key=lambda o: o["price"]) if maybe else None)
@@ -483,7 +547,10 @@ def compare(name, own_url="", own_price=None, settings=None, query=None):
     if any(o["odd"] for o in offers):
         notes.append("Marqué como «atípico» un precio muy distinto al de referencia: suele ser otra versión, un accesorio o un paquete. No cuenta como mejor opción.")
     if not mine:
-        notes.append("No pude leer el precio de tu link, así que no lo comparé. Escríbelo abajo (o pega el que ves en la tienda) y recalculo.")
+        if "amazon" in (own_url or "").lower():
+            notes.append("Amazon no me dejó leer el precio de tu link (bloquea la lectura automática o muestra otro precio sin tu sesión). Escríbelo abajo, o guarda la idea con el botón «Guardar en Mi Cuarto» desde la página del producto: ese lo lee desde tu navegador.")
+        else:
+            notes.append("No pude leer el precio de tu link, así que no lo comparé. Escríbelo abajo (o pega el que ves en la tienda) y recalculo.")
 
     summary = ""
     if best:
@@ -499,14 +566,14 @@ def compare(name, own_url="", own_price=None, settings=None, query=None):
         if low_conf:
             notes.append("La coincidencia con el producto no es alta: confirma que sea el mismo antes de comprar.")
     elif offers:
-        summary = f"Encontré precios, pero ninguno en {c['cur']}. Revísalos abajo."
+        summary = f"Encontré precios, pero ninguno en {tgt}. Revísalos abajo."
     else:
         summary = "No encontré precios verificables para este producto."
-    other = [o for o in offers if o["currency"] != c["cur"]]
+    other = [o for o in offers if o["currency"] != tgt]
     if other and best:
-        notes.append(f"{len(other)} oferta(s) están en otra moneda y no se comparan con {c['cur']}.")
+        notes.append(f"{len(other)} oferta(s) están en otra moneda y no se comparan con {tgt}.")
 
-    return {"query": query, "country": country, "currency": c["cur"],
+    return {"query": query, "country": country, "currency": tgt,
             "checked_at": datetime.now().isoformat(timespec="seconds"),
             "offers": offers[:15], "best": best, "own_missing": not mine, "own_unverified": bool(mine and mine.get("approx")), "summary": summary, "notes": notes,
             "links": quick_links(query, country)}

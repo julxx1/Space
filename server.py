@@ -20,6 +20,7 @@ DATA = os.path.join(BASE, "data.json")
 GROUPS = os.path.join(BASE, "groups.json")
 SETTINGS = os.path.join(BASE, "settings.json")
 IMG = os.path.join(BASE, "imagenes")
+prices.RATES_FILE = os.path.join(BASE, "rates.json")
 PORT = int(os.environ.get("MICUARTO_PORT", "8765"))
 MAX_IMGS = 12
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -46,7 +47,7 @@ KEYWORDS = [  # el orden es la prioridad
     ("Muebles", "silla sillas sillon sofa mesa mesas escritorio cama comoda mueble muebles banco banca puff pouf butaca closet armario rack chair desk table couch ottoman nightstand mesita tocador"),
     ("Decoración", "adorno adornos figura figuras vela velas jarron florero decor decoracion reloj escultura candle vase ornament bandeja"),
 ]
-DEFAULT_SETTINGS = {"isolate": True, "auto_compare": True, "country": "CO", "serper_key": ""}
+DEFAULT_SETTINGS = {"isolate": True, "auto_compare": True, "country": "CO", "currency": "", "serper_key": ""}
 DEFAULT_GROUPS = [("mb-cuarto", "Cuarto principal"), ("mb-escritorio", "Escritorio"),
                   ("mb-closet", "Closet"), ("mb-lectura", "Rincón de lectura")]
 
@@ -128,12 +129,21 @@ def load_groups():
     return read_json(GROUPS, [])
 
 
+def effective_currency(s=None):
+    s = s or get_settings()
+    if s.get("currency") in prices.CURRENCIES:
+        return s["currency"]
+    return prices.COUNTRIES.get(s.get("country"), prices.COUNTRIES["CO"])["cur"]
+
+
 def public_settings():
     s = get_settings()
     key = s.pop("serper_key", "")
     s["has_key"] = bool(key)
     s["key_hint"] = ("••••" + key[-4:]) if key else ""
     s["countries"] = {k: v["name"] for k, v in prices.COUNTRIES.items()}
+    s["currencies"] = prices.CURRENCIES
+    s["currency_eff"] = effective_currency(s)
     return s
 
 
@@ -164,6 +174,8 @@ def fetch(url, referer=None, limit=15_000_000, ua=None):
     }
     if referer:
         headers["Referer"] = referer
+    if re.search(r"//[^/]*amazon\.com(/|$)", url):   # que Amazon muestre el precio en tu moneda
+        headers["Cookie"] = f"i18n-prefs={effective_currency()}; lc-main=es_US"
     with urlopen(Request(url, headers=headers), timeout=15) as r:
         body = r.read(limit)
         return body, r.headers.get("Content-Type", ""), r.geturl(), r.headers
@@ -541,6 +553,9 @@ class H(BaseHTTPRequestHandler):
                 return self.send(200, load_groups())
         if p == ["api", "settings"]:
             return self.send(200, public_settings())
+        if p == ["api", "rates"]:
+            r, at = prices.get_rates()
+            return self.send(200, {"base": "USD", "rates": r, "updated": at})
         if p == ["api", "status"]:
             with lock:
                 busy = sum(1 for i in load() if i["busy"])
@@ -714,6 +729,8 @@ class H(BaseHTTPRequestHandler):
                 s["auto_compare"] = bool(b["auto_compare"])
             if b.get("country") in prices.COUNTRIES:
                 s["country"] = b["country"]
+            if "currency" in b and (b["currency"] in prices.CURRENCIES or b["currency"] == ""):
+                s["currency"] = b["currency"]
             if "serper_key" in b:
                 k = str(b["serper_key"]).strip()
                 if not k.startswith("••••"):
