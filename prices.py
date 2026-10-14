@@ -225,6 +225,18 @@ def _offers_of(product):
     return res
 
 
+DEAD_RX = re.compile(r"page not found|p[aá]gina no encontrada|no se encontr[oó] la p[aá]gina|404 not found|"
+                     r"this page (?:doesn't|does not) exist|esta p[aá]gina no existe|product (?:is )?no longer available|"
+                     r"producto no (?:est[aá] )?disponible", re.I)
+
+
+def looks_dead(html_text):
+    """Páginas que responden 200 pero muestran 'no encontrada' (el precio que traen es de un producto que ya no está)."""
+    body = re.sub(r"(?is)<(script|style|noscript|head)\b.*?</\1>", " ", html_text)
+    text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", body))[:6000]
+    return bool(DEAD_RX.search(text))
+
+
 def extract_offers(html_text, url=""):
     """Precios que la página publica en datos estructurados. -> lista de ofertas (sin repetir)."""
     found, title = [], ""
@@ -383,6 +395,8 @@ def from_web(query, country, own_url):
             page, final = http_get(url, timeout=9)
         except Exception:
             return []
+        if looks_dead(page):
+            return []
         res = []
         for o in extract_offers(page, final)[:2]:
             res.append({"title": o.get("title") or title, "url": final, "store": store_of(final),
@@ -422,7 +436,7 @@ def image_search(image_url, country, key, target=None):
     def read(o):
         try:
             page, final = http_get(o["url"], timeout=9)
-            offs = extract_offers(page, final)
+            offs = [] if looks_dead(page) else extract_offers(page, final)
             if offs:
                 cur = (offs[0].get("currency") or guess_currency(final, c["cur"])).upper()
                 o["price"], o["currency"] = offs[0]["price"], cur
