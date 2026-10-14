@@ -1,5 +1,9 @@
-﻿MI CUARTO  -  version 9.2
+﻿MI CUARTO  -  version 9.3
 =======================
+
+NOVEDADES VERSION 9.3
+- Buscar por foto: en el detalle de cada idea, la foto se abre en Google Lens, Bing, Yandex o TinEye. Con la clave de Serper.dev (Configuracion) la web ademas analiza la foto sola, dice que producto parece ser, lista tiendas con precio y puede buscar precios con ese nombre. En los pines de Pinterest lo hace automaticamente.
+- Las ideas guardadas antes de esta version no recuerdan el link de la foto: para ellas solo funciona el boton de Google Lens (subiendo la foto).
 
 NOVEDADES VERSION 9.2
 - Configuracion > Moneda: elige en que moneda ver y comparar los precios. Los precios en otras monedas se convierten con la tasa del dia (se ve con el simbolo ≈).

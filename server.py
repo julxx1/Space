@@ -97,6 +97,7 @@ def norm(it):
     it["image"] = it["images"][0] if it["images"] else ""
     it.setdefault("alts", {})
     it.setdefault("iso", [])
+    it.setdefault("srcs", {})
     it.setdefault("groups", [])
     it.setdefault("shop", False)
     it.setdefault("bought", False)
@@ -367,14 +368,14 @@ def download_image(img_url, referer):
     return store(*r) if r else ""
 
 
-def download_many(urls, referer, limit=6):
+def download_many(urls, referer, limit=6, srcs=None):
     urls = urls[: limit + 3]
     if not urls:
         return []
     with ThreadPoolExecutor(4) as ex:
         res = list(ex.map(lambda u: fetch_image(u, referer), urls))
     seen, out = set(), []
-    for r in res:
+    for u, r in zip(urls, res):
         if not r:
             continue
         h = hashlib.sha1(r[0]).hexdigest()
@@ -382,6 +383,8 @@ def download_many(urls, referer, limit=6):
             continue
         seen.add(h)
         out.append(store(*r))
+        if srcs is not None:
+            srcs[out[-1]] = u
         if len(out) >= limit:
             break
     return out
@@ -461,6 +464,15 @@ def job_compare(iid, query=None):
             if not it:
                 return
             name, url, price = it["name"], it["url"], it.get("price")
+            first = it["images"][0] if it["images"] else ""
+            itc = dict(it)
+        if not query and "pinterest" in (url or "") and first and get_settings().get("serper_key"):
+            try:  # un pin no dice qué producto es: lo identifico por la foto y busco con ese nombre
+                im = run_imgsearch(itc, first)
+                update_item(iid, lambda i: i.update(imgsearch=im))
+                query = im.get("guess") or None
+            except Exception:
+                pass
         if url and not (price and price.get("manual")):  # precio no confirmado por ti: se vuelve a leer
             try:
                 fresh = scrape(url)[3]
@@ -489,6 +501,46 @@ def job_compare(iid, query=None):
 def queue_isolate(iid, only=None):
     update_item(iid, lambda it: it["busy"].__setitem__("cutout", True))
     CUT_POOL.submit(job_isolate, iid, only)
+
+
+def public_src(it, fn):
+    """Link público de la foto original (lo necesita la búsqueda por imagen)."""
+    s = it.get("srcs") or {}
+    return s.get(fn) or s.get(it["alts"].get(fn, "")) or ""
+
+
+def run_imgsearch(it, fn):
+    st = get_settings()
+    key = (st.get("serper_key") or "").strip()
+    out = {"image": fn, "checked_at": datetime.now().isoformat(timespec="seconds")}
+    src = public_src(it, fn)
+    if not key:
+        out["error"] = "Para analizar la foto automáticamente necesitas la clave gratuita de Serper.dev (Configuración)."
+    elif not src:
+        out["error"] = "Esta foto no tiene un link público (la subiste o pegaste tú). Usa una foto que venga de la página."
+    else:
+        try:
+            out.update(prices.image_search(src, st.get("country"), key, effective_currency(st)))
+        except Exception as e:
+            out["error"] = "No pude buscar la foto (" + e.__class__.__name__ + "). Revisa tu clave de Serper."
+    return out
+
+
+def job_imgsearch(iid, fn):
+    try:
+        with lock:
+            it = find(load(), iid)
+            if not it:
+                return
+        res = run_imgsearch(it, fn)
+    except Exception as e:
+        res = {"image": fn, "error": "No pude analizar la foto (" + e.__class__.__name__ + ")."}
+
+    def apply(it):
+        it["imgsearch"] = res
+        it["busy"].pop("imgsearch", None)
+
+    update_item(iid, apply)
 
 
 def queue_compare(iid, query=None):
@@ -553,6 +605,14 @@ class H(BaseHTTPRequestHandler):
                 return self.send(200, load_groups())
         if p == ["api", "settings"]:
             return self.send(200, public_settings())
+        if len(p) == 2 and p[0] == "lens":
+            fn = os.path.basename(p[1])
+            page = ("<!doctype html><meta charset=utf-8><title>Buscando…</title><body style='font:16px system-ui;padding:40px'>"
+                    "<p>Subiendo tu foto a Google Lens…</p><p style='color:#666;font-size:14px'>Si no se abre, entra a lens.google.com y arrastra la foto.</p>"
+                    "<form id=f method=POST action='https://lens.google.com/upload?hl=es' enctype='multipart/form-data'><input type=file name=encoded_image id=i></form>"
+                    "<script>fetch('/imagenes/" + fn + "').then(r=>r.blob()).then(b=>{var d=new DataTransfer();d.items.add(new File([b],'foto.jpg',{type:b.type||'image/jpeg'}));"
+                    "document.getElementById('i').files=d.files;document.getElementById('f').submit()})</script>")
+            return self.send(200, raw=page.encode("utf-8"), ctype="text/html; charset=utf-8")
         if p == ["api", "rates"]:
             r, at = prices.get_rates()
             return self.send(200, {"base": "USD", "rates": r, "updated": at})
@@ -637,7 +697,8 @@ class H(BaseHTTPRequestHandler):
             name = name or n2
             price = price or p2
             imgs += [u for u in i2 if u not in imgs]
-        files = download_many(imgs, url)
+        srcs = {}
+        files = download_many(imgs, url, srcs=srcs)
         if not name and not files and err is not None:
             aviso = f"No pude abrir la página ({err.__class__.__name__}). Complétalo tú."
         else:
@@ -649,6 +710,7 @@ class H(BaseHTTPRequestHandler):
             "id": uuid.uuid4().hex[:10],
             "name": name or host,
             "images": files,
+            "srcs": srcs,
             "url": url,
             "site": host,
             "added": datetime.now().isoformat(timespec="seconds"),
@@ -688,6 +750,12 @@ class H(BaseHTTPRequestHandler):
                     if fn in i["iso"]:
                         swap_image(i, fn)
             update_item(iid, restore)
+        elif action == "imgsearch":
+            fn = b.get("image") or (it["images"][0] if it["images"] else "")
+            if not fn:
+                raise Bad("Esta idea no tiene imágenes.")
+            update_item(iid, lambda i: i["busy"].__setitem__("imgsearch", True))
+            NET_POOL.submit(job_imgsearch, iid, fn)
         elif action == "compare":
             q = (b.get("query") or "").strip()[:150] or None
             queue_compare(iid, q)
@@ -805,6 +873,7 @@ class H(BaseHTTPRequestHandler):
                 if not fn:
                     return err.append("No pude descargar esa imagen.")
                 it["images"].append(fn)
+                it["srcs"][fn] = b["add_image_url"].strip()
             rm = b.get("remove_image")
             if rm and rm in it["images"]:
                 drop_image(it, rm)

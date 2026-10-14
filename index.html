@@ -948,6 +948,25 @@ async function reload() {
 let det = null;   // {id, idx, sig}
 function openDetail(id) { det = {id, idx: 0, sig: ''}; renderDetail(true); openModal('dback'); }
 
+function imgPanel(it) {
+  const fn = it.images[Math.min(det ? det.idx : 0, it.images.length - 1)]; if (!fn) return '';
+  const src = (it.srcs && (it.srcs[fn] || it.srcs[(it.alts || {})[fn]])) || '', u = encodeURIComponent(src);
+  const busy = it.busy && it.busy.imgsearch, r = it.imgsearch;
+  let h = '<div class="bx"><h4>Buscar por foto</h4><p style="font-size:13.5px;color:var(--mute);margin:0 0 10px">Analiza la foto que estás viendo para encontrar qué producto es y dónde comprarlo.</p>';
+  if (settings && settings.has_key) h += `<button class="chipb dk" data-do="imgsearch" ${busy ? 'disabled' : ''}>${busy ? 'Analizando la foto…' : r && r.checked_at ? 'Analizar de nuevo esta foto' : 'Analizar foto y buscar tiendas'}</button>`;
+  else h += '<div class="nts" style="margin:0 0 8px"><div>Con la clave gratuita de Serper.dev (Configuración) la web analiza la foto sola y te muestra tiendas y precios aquí. Mientras tanto, ábrela en un buscador:</div></div>';
+  h += '<div class="qlinks" style="margin-top:10px">' + (src
+    ? `<a target="_blank" rel="noopener" href="https://lens.google.com/uploadbyurl?url=${u}&hl=es">Google Lens ↗</a><a target="_blank" rel="noopener" href="https://www.bing.com/images/search?view=detailv2&iss=sbi&form=SBIVSP&sbisrc=UrlPaste&q=imgurl:${u}">Bing ↗</a><a target="_blank" rel="noopener" href="https://yandex.com/images/search?rpt=imageview&url=${u}">Yandex ↗</a><a target="_blank" rel="noopener" href="https://tineye.com/search?url=${u}">TinEye ↗</a>`
+    : `<a target="_blank" rel="noopener" href="/lens/${encodeURIComponent(fn)}">Google Lens ↗</a>`) + '</div>';
+  if (busy) h += '<div class="row" style="gap:10px;font-size:14px;margin-top:12px"><i class="spin dk"></i> Buscando esta foto en internet…</div>';
+  else if (r && r.error) h += `<div class="noteb" style="margin-top:12px">${esc(r.error)}</div>`;
+  else if (r && r.checked_at) {
+    if (r.guess) h += `<div class="noteb" style="margin:12px 0 8px">Parece ser: <b>${esc(r.guess)}</b> <button class="chipb" style="margin-left:8px" data-do="useguess" data-q="${esc(r.guess)}">Buscar precios con este nombre</button></div>`;
+    if (r.results && r.results.length) h += `<div style="overflow-x:auto"><table class="otbl"><thead><tr><th>Tienda</th><th>Precio</th><th></th></tr></thead><tbody>` + r.results.map(o => `<tr title="${esc(o.title || '')}"><td><b>${esc(o.store)}</b><small style="display:block;color:var(--mute);max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(o.title || '')}</small></td><td>${o.price ? esc(money(o.price, o.currency)) + (o.orig ? `<small style="display:block;color:var(--mute)">de ${esc(fmt(o.orig.price, o.orig.currency))}</small>` : '') : '<span style="color:var(--mute)">—</span>'}</td><td><a target="_blank" rel="noopener" href="${esc(o.url)}">Ver ↗</a></td></tr>`).join('') + '</tbody></table></div><div class="nts"><div>Son coincidencias visuales: confirma que sea el mismo producto antes de comprar.</div></div>';
+    else h += '<div class="noteb" style="margin-top:12px">No encontré tiendas para esta foto.</div>';
+  }
+  return h + '</div>';
+}
 function comparePanel(it) {
   const c = it.compare || {}, busy = it.busy && it.busy.compare;
   const q = c.query || it.name || '';
@@ -1033,6 +1052,7 @@ function renderDetail(force) {
       </div>
       <div class="field"><label for="dCat">Categoría</label><select id="dCat">${catOpts}</select></div>
       <div class="gcheap"><b>Guardar en…</b><div class="gchips">${gch}<button class="chipb" data-do="gnew">＋ Nueva colección</button></div></div>
+      ${imgPanel(it)}
       ${comparePanel(it)}
     </div>
   </div>`;
@@ -1065,6 +1085,8 @@ $('#detail').addEventListener('click', async e => {
       case 'shop': { const r = await patch(it.id, {shop: !it.shop}); if (r) toast(r.shop ? 'Añadida a tu lista de compras' : 'Quitada de la lista'); return; }
       case 'del': return removeItem(it.id);
       case 'compare': return compareNow(it.id, ($('#cq') || {}).value);
+      case 'imgsearch': { replaceItem(await api('POST', `/api/items/${it.id}/imgsearch`, {image: it.images[det.idx]})); return toast('Analizando la foto…'); }
+      case 'useguess': return compareNow(it.id, d.dataset.q);
       case 'setprice': {
         const raw = ($('#cprice') || {}).value || '';
         if (!raw.trim()) return toast('Escribe el precio que ves en tu link.');

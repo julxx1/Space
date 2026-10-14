@@ -29,6 +29,7 @@ RATES_TTL = 12 * 3600      # se actualizan cada 12 horas
 CURRENCIES = {"COP": "Peso colombiano (COP)", "USD": "Dólar estadounidense (USD)", "EUR": "Euro (EUR)",
               "MXN": "Peso mexicano (MXN)", "ARS": "Peso argentino (ARS)", "CLP": "Peso chileno (CLP)",
               "PEN": "Sol peruano (PEN)", "BRL": "Real brasileño (BRL)"}
+LENS_URL = os.environ.get("MICUARTO_LENS", "https://google.serper.dev/lens")
 _rates = {"at": 0, "rates": {}}
 
 COUNTRIES = {
@@ -392,6 +393,64 @@ def from_web(query, country, own_url):
     with ThreadPoolExecutor(6) as ex:
         pages = list(ex.map(read, cands))
     return [o for lst in pages for o in lst], len(cands)
+
+
+# ------------------------------------------------------------------ búsqueda por imagen
+def image_search(image_url, country, key, target=None):
+    """Busca la foto en internet (Google Lens vía Serper.dev). -> {results, guess}.
+    Cada resultado: título, tienda, link y, si la página lo publica, precio."""
+    c = COUNTRIES.get(country) or COUNTRIES["CO"]
+    tgt = target if target in CURRENCIES else c["cur"]
+    body = json.dumps({"url": image_url, "gl": c["gl"], "hl": "es"}).encode()
+    txt, _ = http_get(LENS_URL, timeout=25, data=body, method="POST",
+                      headers={"X-API-KEY": key, "Content-Type": "application/json"})
+    data = json.loads(txt)
+    rows = data.get("organic") or data.get("visual_matches") or data.get("results") or []
+    cands, seen = [], set()
+    for r in rows:
+        link = r.get("link") or r.get("url") or ""
+        title = r.get("title") or ""
+        d = domain_of(link)
+        if not link.startswith("http") or not d or any(s in d for s in SKIP_DOMAINS) or "google." in d or d in seen:
+            continue
+        seen.add(d)
+        cands.append({"title": title, "url": link, "store": r.get("source") or store_of(link),
+                      "thumb": r.get("thumbnailUrl") or r.get("imageUrl") or "", "price": None, "currency": None})
+        if len(cands) >= 10:
+            break
+
+    def read(o):
+        try:
+            page, final = http_get(o["url"], timeout=9)
+            offs = extract_offers(page, final)
+            if offs:
+                cur = (offs[0].get("currency") or guess_currency(final, c["cur"])).upper()
+                o["price"], o["currency"] = offs[0]["price"], cur
+                o["availability"] = offs[0].get("availability", "unknown")
+        except Exception:
+            pass
+        return o
+
+    with ThreadPoolExecutor(6) as ex:
+        res = list(ex.map(read, cands))
+    for o in res:
+        if o["price"] and o["currency"] != tgt and o["currency"] in CURRENCIES:
+            cv = convert(o["price"], o["currency"], tgt)
+            if cv:
+                o["orig"] = {"price": o["price"], "currency": o["currency"]}
+                o["price"], o["currency"] = round(cv, 2), tgt
+    res.sort(key=lambda o: (o["price"] is None, o["price"] or 0))
+    # "Parece ser": el título que más comparte palabras con los demás resultados
+    titles = [o["title"] for o in cands if o["title"]]
+    freq = {}
+    for t in titles:
+        for w in set(tokens(t)):
+            freq[w] = freq.get(w, 0) + 1
+    guess = ""
+    if titles:
+        best = max(titles, key=lambda t: sum(freq[w] for w in set(tokens(t))) / (1 + len(set(tokens(t))) ** 0.5))
+        guess = clean_query(best)
+    return {"results": res, "guess": guess, "currency": tgt}
 
 
 # ------------------------------------------------------------------ comparación
