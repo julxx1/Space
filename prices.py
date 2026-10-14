@@ -29,6 +29,7 @@ RATES_TTL = 12 * 3600      # se actualizan cada 12 horas
 CURRENCIES = {"COP": "Peso colombiano (COP)", "USD": "Dólar estadounidense (USD)", "EUR": "Euro (EUR)",
               "MXN": "Peso mexicano (MXN)", "ARS": "Peso argentino (ARS)", "CLP": "Peso chileno (CLP)",
               "PEN": "Sol peruano (PEN)", "BRL": "Real brasileño (BRL)"}
+BING_URL = os.environ.get("MICUARTO_BING", "https://www.bing.com/search")
 LENS_URL = os.environ.get("MICUARTO_LENS", "https://google.serper.dev/lens")
 _rates = {"at": 0, "rates": {}}
 
@@ -376,24 +377,79 @@ def from_mercadolibre(query, country):
     return out
 
 
-def from_web(query, country, own_url):
-    """Busca en la web y lee el precio publicado en cada página de tienda."""
+def parse_bing(html_text):
+    out = []
+    for m in re.finditer(r'<li class="b_algo"[^>]*>.*?<h2[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>(.*?)</a>', html_text, re.S):
+        href = htmlmod.unescape(m.group(1))
+        q = up.urlparse(href)
+        if "bing.com" in q.netloc and q.path.startswith("/ck/"):
+            u = up.parse_qs(q.query).get("u", [""])[0]
+            if u.startswith("a1"):
+                import base64
+                try:
+                    href = base64.urlsafe_b64decode(u[2:] + "=" * (-len(u[2:]) % 4)).decode("utf-8", "ignore")
+                except Exception:
+                    continue
+        if href.startswith("http") and "bing.com" not in domain_of(href):
+            out.append((href, re.sub(r"\s+", " ", htmlmod.unescape(re.sub(r"<[^>]+>", "", m.group(2)))).strip()))
+    return out
+
+
+def search_queries(query, country, extra=()):
+    """Varias formas de preguntar lo mismo: así aparecen tiendas que una sola búsqueda no trae."""
     c = COUNTRIES[country]
-    results = []
-    for q in (f"{query} comprar precio {c['name']}", f"{query} precio"):
-        txt, _ = http_get(DDG_URL + "?" + up.urlencode({"q": q, "kl": c["kl"]}), timeout=12)
-        if re.search(r"anomaly|unusual traffic|captcha", txt[:20000], re.I) and not parse_ddg(txt):
-            raise RuntimeError("El buscador limitó las consultas")
-        results += parse_ddg(txt)
-    seen, cands = set(), []
+    words = query.split()
+    short = " ".join(words[:5])
+    qs = [f"{query} comprar precio {c['name']}", f"{query} precio", f"{short} {c['name']}",
+          f"{short} buy online price", f"\"{' '.join(words[:4])}\" shop"]
+    for g in extra:
+        if g:
+            qs += [f"{g} comprar {c['name']}", f"{g} price"]
+    seen, out = set(), []
+    for q in qs:
+        k = q.lower()
+        if k not in seen and q.strip():
+            seen.add(k)
+            out.append(q)
+    return out[:8]
+
+
+def from_web(query, country, own_url, extra=()):
+    """Busca en DuckDuckGo y Bing con varias formulaciones y lee el precio publicado en cada tienda."""
+    c = COUNTRIES[country]
+    queries = search_queries(query, country, extra)
+    notes_ddg = []
+
+    def search(args):
+        kind, q = args
+        try:
+            if kind == "ddg":
+                txt, _ = http_get(DDG_URL + "?" + up.urlencode({"q": q, "kl": c["kl"]}), timeout=12)
+                res = parse_ddg(txt)
+                if not res and re.search(r"anomaly|unusual traffic|captcha", txt[:20000], re.I):
+                    notes_ddg.append("limit")
+                return res
+            txt, _ = http_get(BING_URL + "?" + up.urlencode({"q": q, "setlang": "es", "cc": c["gl"].upper()}), timeout=12)
+            return parse_bing(txt)
+        except Exception:
+            return []
+
+    jobs = [("ddg", q) for q in queries] + [("bing", q) for q in queries[:4]]
+    with ThreadPoolExecutor(4) as ex:
+        results = [r for lst in ex.map(search, jobs) for r in lst]
+    if not results and notes_ddg:
+        raise RuntimeError("El buscador limitó las consultas")
+    # una página por tienda: la que mejor se parece al producto
+    by_dom = {}
     for url, title in results:
         d = domain_of(url)
-        if not d or any(s in d for s in SKIP_DOMAINS) or d in seen:
+        if not d or any(s in d for s in SKIP_DOMAINS):
             continue
-        seen.add(d)
-        cands.append((url, title))
-        if len(cands) >= 10:
-            break
+        sc = match_score(query, title + " " + " ".join(re.findall(r"[A-Za-z0-9]+", up.urlparse(url).path)))
+        if d not in by_dom or sc > by_dom[d][0]:
+            by_dom[d] = (sc, url, title)
+    ranked = sorted(by_dom.values(), key=lambda x: -x[0])
+    cands = [(u, t) for sc, u, t in ranked if sc >= 0.25][:24]
 
     def read(item):
         url, title = item
@@ -410,7 +466,7 @@ def from_web(query, country, own_url):
                         "availability": o.get("availability", "unknown"), "source": "Página de la tienda"})
         return res
 
-    with ThreadPoolExecutor(6) as ex:
+    with ThreadPoolExecutor(8) as ex:
         pages = list(ex.map(read, cands))
     return [o for lst in pages for o in lst], len(cands)
 
@@ -534,7 +590,7 @@ def money(v, cur):
     return f"{n} {cur}"
 
 
-def compare(name, own_url="", own_price=None, settings=None, query=None):
+def compare(name, own_url="", own_price=None, settings=None, query=None, extra=None):
     """-> dict con ofertas ordenadas, la mejor opción, un resumen y avisos."""
     settings = settings or {}
     country = settings.get("country") if settings.get("country") in COUNTRIES else "CO"
@@ -545,24 +601,42 @@ def compare(name, own_url="", own_price=None, settings=None, query=None):
     notes, raw = [], []
     key = (settings.get("serper_key") or "").strip()
 
-    if key:
+    raw += list((extra or {}).get("offers") or [])           # lo que encontró la búsqueda por foto
+    guesses = [(extra or {}).get("guess")] if (extra or {}).get("guess") and not query_given else []
+
+    def job_serper():
+        if not key:
+            return []
         try:
-            raw += from_serper(query, country, key)
+            return from_serper(query, country, key) + sum([from_serper(g, country, key) for g in guesses], [])
         except Exception as e:
-            notes.append(f"Serper.dev no respondió ({e.__class__.__name__}). Revisa tu clave.")
-    try:
-        raw += from_mercadolibre(query, country)
-    except Exception:
-        pass  # la API pública de MercadoLibre puede pedir sesión: se ignora sin ruido
-    if len(raw) < 4:
+            code = getattr(e, "code", None)
+            why = ("la clave no es válida" if code in (401, 403) else "se acabó el límite de tu plan" if code == 429
+                   else "error " + (str(code) if code else e.__class__.__name__))
+            notes.append(f"Serper.dev no respondió ({why}). Revisa tu clave en Configuración.")
+            return []
+
+    def job_ml():
         try:
-            web, n = from_web(query, country, own_url)
-            raw += web
+            return from_mercadolibre(query, country)
+        except Exception:
+            return []   # la API pública de MercadoLibre puede pedir sesión: se ignora sin ruido
+
+    def job_web():
+        try:
+            web, n = from_web(query, country, own_url, guesses)
             if n == 0:
                 notes.append("El buscador no devolvió tiendas para esta búsqueda.")
+            return web
         except Exception as e:
             notes.append("No pude consultar el buscador web (" + (str(e) or e.__class__.__name__) +
                          "). Para resultados más estables agrega una clave gratuita de Serper.dev en Configuración.")
+            return []
+
+    with ThreadPoolExecutor(3) as ex:
+        futs = [ex.submit(f) for f in (job_serper, job_ml, job_web)]
+        for f in futs:
+            raw += f.result()
 
     if own_price:
         raw.append({"title": name, "url": own_url, "store": store_of(own_url) if own_url else "Tu link",

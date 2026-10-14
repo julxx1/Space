@@ -1,5 +1,8 @@
-﻿MI CUARTO  -  version 9.3
+﻿MI CUARTO  -  version 9.4
 =======================
+
+NOVEDADES VERSION 9.4
+- La busqueda de precios investiga mas: hace hasta 8 busquedas distintas en DuckDuckGo y Bing, revisa hasta 24 tiendas (la pagina que mas se parece de cada una), suma los resultados de la busqueda por foto y, si hay clave de Serper, tambien Google Shopping. Los avisos de Serper dicen si la clave es invalida o se acabo el limite.
 
 NOVEDADES VERSION 9.3
 - Buscar por foto: en el detalle de cada idea, la foto se abre en Google Lens, Bing, Yandex o TinEye. Con la clave de Serper.dev (Configuracion) la web ademas analiza la foto sola, dice que producto parece ser, lista tiendas con precio y puede buscar precios con ese nombre. En los pines de Pinterest lo hace automaticamente.

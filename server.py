@@ -458,6 +458,7 @@ def job_isolate(iid, only=None):
 
 
 def job_compare(iid, query=None):
+    user_query = bool(query)
     try:
         with lock:
             it = find(load(), iid)
@@ -466,13 +467,27 @@ def job_compare(iid, query=None):
             name, url, price = it["name"], it["url"], it.get("price")
             first = it["images"][0] if it["images"] else ""
             itc = dict(it)
-        if not query and "pinterest" in (url or "") and first and get_settings().get("serper_key"):
-            try:  # un pin no dice qué producto es: lo identifico por la foto y busco con ese nombre
+        # 1) la foto: identifica el producto y trae tiendas reales (necesita la clave de Serper y un link público)
+        im = itc.get("imgsearch") or {}
+        if get_settings().get("serper_key") and first and public_src(itc, first) and not (im.get("results") or im.get("guess")):
+            try:
                 im = run_imgsearch(itc, first)
                 update_item(iid, lambda i: i.update(imgsearch=im))
-                query = im.get("guess") or None
             except Exception:
-                pass
+                im = {}
+        extra = None
+        if im.get("results") or im.get("guess"):
+            offers = []
+            for o in im.get("results", []):
+                if o.get("price"):
+                    pr = o.get("orig") or {"price": o["price"], "currency": o["currency"]}
+                    offers.append({"title": o["title"], "url": o["url"], "store": o["store"], "price": pr["price"],
+                                   "currency": pr["currency"], "availability": o.get("availability", "unknown"),
+                                   "source": "Búsqueda por foto"})
+            extra = {"guess": None if user_query else im.get("guess"), "offers": offers}
+            if not user_query and "pinterest" in (url or "") and im.get("guess"):
+                query = im["guess"]     # un pin no dice qué producto es: busco con el nombre que sale de la foto
+        # 2) el precio de tu link
         if url and not (price and price.get("manual")):  # precio no confirmado por ti: se vuelve a leer
             try:
                 fresh = scrape(url)[3]
@@ -484,7 +499,7 @@ def job_compare(iid, query=None):
                     update_item(iid, lambda it: it.update(price=price))
             except Exception:
                 pass
-        res = prices.compare(name, url, price, get_settings(), query)
+        res = prices.compare(name, url, price, get_settings(), query, extra)
     except Exception as e:
         res = {"error": "No pude comparar precios (" + e.__class__.__name__ + ").",
                "checked_at": datetime.now().isoformat(timespec="seconds"),
