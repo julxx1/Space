@@ -77,3 +77,5 @@ ACTUALIZACIONES AUTOMATICAS
 - Tus ideas, fotos y ajustes nunca se tocan.
 - Sin internet, se abre la version que ya tienes.
 - Si quieres forzar la busqueda sin abrir la web: actualizar.bat
+
+Version 9.5: hero "Un espacio muy tu" y marco de cromo liquido con gotas en la pestana activa del menu.
