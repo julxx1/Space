@@ -1,6 +1,6 @@
 @echo off
 cd /d "%~dp0"
-title Mi Cuarto
+title Idearium
 echo Buscando actualizaciones...
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0actualizar.ps1"
 set PY=
@@ -12,7 +12,7 @@ if "%PY%"=="" goto nopy
 %PY% -c "import onnxruntime, numpy, PIL" >nul 2>nul
 if %errorlevel%==0 goto run
 echo.
-echo Preparando Mi Cuarto por primera vez.
+echo Preparando Idearium por primera vez.
 echo Instalando los componentes para aislar productos y comparar precios.
 echo Esto tarda unos minutos y solo pasa una vez. No cierres esta ventana.
 echo.

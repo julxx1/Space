@@ -10,7 +10,7 @@ NOVEDADES VERSION 9.3
 
 NOVEDADES VERSION 9.2
 - Configuracion > Moneda: elige en que moneda ver y comparar los precios. Los precios en otras monedas se convierten con la tasa del dia (se ve con el simbolo ≈).
-- Amazon: se pide el precio en tu moneda, se lee solo el precio principal y, si Amazon lo bloquea, la web te avisa y te deja escribirlo. El boton 'Guardar en Mi Cuarto' lee el precio desde tu navegador.
+- Amazon: se pide el precio en tu moneda, se lee solo el precio principal y, si Amazon lo bloquea, la web te avisa y te deja escribirlo. El boton 'Guardar en Idearium' lee el precio desde tu navegador.
 
 NOVEDADES VERSION 9.1
 - Precio de Amazon: ahora solo lee el precio principal de la pagina (no el de listas, variantes o carruseles). Si el precio de tu link se leyo automaticamente, la web te pide confirmarlo y recalcula con el que escribas; ese precio ya no se sobrescribe.
@@ -33,7 +33,7 @@ CÓMO ABRIRLO
    - La primera vez instala unos componentes (unos minutos) y después descarga
      un modelo de IA de ~180 MB (una sola vez, necesita internet).
    - Se abre solo la página en http://localhost:8765
-3. Para cerrar Mi Cuarto, cierra la ventana negra.
+3. Para cerrar Idearium, cierra la ventana negra.
 
 CÓMO SE USA
 - Pega un link (Pinterest, Amazon o cualquier tienda) arriba y pulsa "Guardar idea".
@@ -73,7 +73,7 @@ LO QUE DEBES SABER (sin letra chica)
   Para llevarte tus ideas a otro computador, copia toda la carpeta.
 
 ACTUALIZACIONES AUTOMATICAS
-- Cada vez que abres iniciar.bat, Mi Cuarto busca la ultima version en GitHub (github.com/julxx1/Space) y se actualiza solo. No necesitas Git ni descargar zips.
+- Cada vez que abres iniciar.bat, Idearium busca la ultima version en GitHub (github.com/julxx1/Space) y se actualiza solo. No necesitas Git ni descargar zips.
 - Tus ideas, fotos y ajustes nunca se tocan.
 - Sin internet, se abre la version que ya tienes.
 - Si quieres forzar la busqueda sin abrir la web: actualizar.bat

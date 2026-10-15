@@ -13,7 +13,7 @@ try {
     $s = Join-Path $src $f
     if (Test-Path $s) { Copy-Item $s (Join-Path $base $f) -Force }
   }
-  Write-Host 'Mi Cuarto esta al dia.'
+  Write-Host 'Idearium esta al dia.'
 } catch {
   Write-Host 'No pude buscar actualizaciones (sin internet?). Se abre la version que ya tienes.'
 }

@@ -56,7 +56,7 @@ def _download(cfg, path):
     url = RELEASE + cfg["name"] + ".onnx"
     part = path + ".part"
     STATE.update(engine="downloading", model=cfg["name"], progress=0, error="")
-    req = urllib.request.Request(url, headers={"User-Agent": "MiCuarto/5"})
+    req = urllib.request.Request(url, headers={"User-Agent": "Idearium/5"})
     with urllib.request.urlopen(req, timeout=60) as r, open(part, "wb") as f:
         total = int(r.headers.get("Content-Length") or 0)
         got = 0

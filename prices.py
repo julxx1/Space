@@ -701,7 +701,7 @@ def compare(name, own_url="", own_price=None, settings=None, query=None, extra=N
         notes.append("Marqué como «atípico» un precio muy distinto al de referencia: suele ser otra versión, un accesorio o un paquete. No cuenta como mejor opción.")
     if not mine:
         if "amazon" in (own_url or "").lower():
-            notes.append("Amazon no me dejó leer el precio de tu link (bloquea la lectura automática o muestra otro precio sin tu sesión). Escríbelo abajo, o guarda la idea con el botón «Guardar en Mi Cuarto» desde la página del producto: ese lo lee desde tu navegador.")
+            notes.append("Amazon no me dejó leer el precio de tu link (bloquea la lectura automática o muestra otro precio sin tu sesión). Escríbelo abajo, o guarda la idea con el botón «Guardar en Idearium» desde la página del producto: ese lo lee desde tu navegador.")
         else:
             notes.append("No pude leer el precio de tu link, así que no lo comparé. Escríbelo abajo (o pega el que ves en la tienda) y recalculo.")
 

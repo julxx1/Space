@@ -1,4 +1,4 @@
-"""Mi Cuarto - guarda ideas de decoración pegando solo un link.
+"""Idearium - guarda ideas de decoración pegando solo un link.
 Corre en tu PC: http://localhost:8765
 
 Archivos:  server.py (este), cutout.py (aislar producto), prices.py (comparar precios), index.html
@@ -951,7 +951,7 @@ if __name__ == "__main__":
     startup()
     srv = ThreadingHTTPServer(("127.0.0.1", PORT), H)
     url = f"http://localhost:{PORT}"
-    print(f"Mi Cuarto corriendo en {url}  (cierra esta ventana para detenerlo)")
+    print(f"Idearium corriendo en {url}  (cierra esta ventana para detenerlo)")
     threading.Timer(1, lambda: webbrowser.open(url)).start()
     try:
         srv.serve_forever()
